@@ -18,15 +18,11 @@ Generates comprehensive sprint analysis reports from Azure DevOps as Markdown.
 ```bash
 dotnet restore
 ```
-2) Create a local config (gitignored):
-```bash
-copy appsettings.Template.json appsettings.json
-```
-3) Fill `appsettings.json` with your Azure DevOps details and PAT (keep it local).
-4) Optional: create `appsettings.local.json` (also gitignored) to override values locally without touching `appsettings.json`.
+2) Open the included `appsettings.json` and fill your Azure DevOps details and PAT.
+3) Optional: create `appsettings.local.json` (gitignored) to override values locally without touching the shared `appsettings.json`.
 
 ## Configuration
-`appsettings.json` (local only, not committed):
+`appsettings.json` (committed with placeholders; edit in place):
 ```json
 {
   "AzureDevOps": {
@@ -40,7 +36,7 @@ copy appsettings.Template.json appsettings.json
   }
 }
 ```
-- Overrides in `appsettings.local.json` take precedence when present.
+- Overrides in `appsettings.local.json` take precedence when present (and stay local).
 - `IterationPath` (if set) overrides `SprintName`.
 - If both are empty, the current sprint is used.
 

@@ -10,8 +10,9 @@ obj/
 .vs/
 
 # Configuration & secrets
-appsettings.json
+appsettings.local.json
 appsettings.*.json
+!appsettings.json
 !appsettings.Template.json
 
 # Reports / generated output
