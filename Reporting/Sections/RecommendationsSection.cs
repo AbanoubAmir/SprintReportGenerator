@@ -82,6 +82,38 @@ public class RecommendationsSection : IReportSection
             }
         }
 
+        // Capacity-based insights
+        var capacities = context.TeamCapacities ?? Array.Empty<TeamCapacity>();
+        if (capacities.Count > 0)
+        {
+            string Normalize(string name) => name.Split('<')[0].Trim().ToLowerInvariant();
+
+            var completedByAssignee = analysis.WorkItems
+                .Where(w => w.CompletedWork.HasValue)
+                .GroupBy(w => Normalize(w.AssignedTo))
+                .ToDictionary(g => g.Key, g => g.Sum(w => w.CompletedWork ?? 0));
+
+            var memberUtil = capacities.Select(c =>
+            {
+                var key = Normalize(c.DisplayName);
+                var completed = completedByAssignee.GetValueOrDefault(key, 0);
+                var util = c.TotalCapacityHours > 0 ? completed / c.TotalCapacityHours * 100 : 0;
+                return new { c.DisplayName, Activity = c.Activity ?? "Unspecified", Util = util };
+            }).ToList();
+
+            var over = memberUtil.Where(m => m.Util > 120).OrderByDescending(m => m.Util).Take(3).ToList();
+            var under = memberUtil.Where(m => m.Util < 60 && m.Util >= 0).OrderBy(m => m.Util).Take(3).ToList();
+
+            if (over.Any())
+            {
+                suggestions.Add("Capacity: rebalance from over-utilized members " + string.Join(", ", over.Select(o => $"{o.DisplayName} ({o.Activity}, {o.Util:F0}%)")) + ".");
+            }
+            if (under.Any())
+            {
+                suggestions.Add("Capacity: assign more to under-utilized members " + string.Join(", ", under.Select(u => $"{u.DisplayName} ({u.Activity}, {u.Util:F0}%)")) + ".");
+            }
+        }
+
         // General cadence
         suggestions.Add("Retrospective follow-through: pick 1–2 improvements (unblocking, scope control) and track them as work items next sprint.");
 

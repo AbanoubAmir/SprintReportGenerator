@@ -43,7 +43,8 @@ class Program
             TeamName = options.TeamName ?? "Team",
             StartDate = sprintData.StartDate,
             EndDate = sprintData.EndDate,
-            GeneratedAt = DateTime.Now
+            GeneratedAt = DateTime.Now,
+            TeamCapacities = sprintData.TeamCapacities
         };
 
         var report = builder.Build(analysis, context);
@@ -105,8 +106,9 @@ class Program
             new ExecutiveSummarySection(),
             new CurrentStateSection(),
             new CompletionSection(),
-            new TaskEstimatesSection(),
             new PlanVsActualSection(),
+            new CapacitySection(),
+            new TaskEstimatesSection(),
             new UserStoriesSection(),
             new SummarySection(),
             new RecommendationsSection()

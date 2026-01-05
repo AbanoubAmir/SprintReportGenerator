@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Text;
+using System.Collections.Generic;
 using SprintReportGenerator.Models;
 using SprintReportGenerator.Reporting;
 
@@ -13,6 +14,8 @@ public class CurrentStateSection : IReportSection
     {
         var sb = new StringBuilder();
         MarkdownHelper.AppendHeader(sb, Title);
+
+        var memberRoles = BuildMemberRoleMap(context.TeamCapacities);
 
         sb.AppendLine("### 1. Breakdown by State");
         sb.AppendLine();
@@ -53,19 +56,31 @@ public class CurrentStateSection : IReportSection
         }
         sb.AppendLine();
 
-        sb.AppendLine("### 4. Breakdown by Assigned To");
+        // Per-role view of assignees (roles sourced from capacity "Activity"; Unspecified means no capacity record)
+        sb.AppendLine("### 4. Breakdown by Assigned To (per Role)");
         sb.AppendLine();
-        sb.AppendLine("| Assignee | Count | Percentage | Completion Rate |");
-        sb.AppendLine("|----------|-------|------------|----------------|");
-        foreach (var assignee in analysis.AssigneeBreakdown.OrderByDescending(a => a.Value))
+
+        var assigneesByRole = analysis.AssigneeBreakdown
+            .GroupBy(kv => memberRoles.GetValueOrDefault(Normalize(kv.Key), "Unspecified"))
+            .OrderByDescending(g => g.Sum(x => x.Value));
+
+        foreach (var roleGroup in assigneesByRole)
         {
-            var percentage = (double)assignee.Value / analysis.TotalItems * 100;
-            var completed = analysis.CompletedByAssignee.GetValueOrDefault(assignee.Key, 0);
-            var completionRate = assignee.Value > 0 ? (double)completed / assignee.Value * 100 : 0;
-            var escapedAssignee = MarkdownHelper.EscapeTableCell(assignee.Key);
-            sb.AppendLine($"| {escapedAssignee} | {assignee.Value} | {percentage:F2}% | {completionRate:F2}% |");
+            sb.AppendLine($"#### Role: {roleGroup.Key}");
+            sb.AppendLine();
+            sb.AppendLine("| Assignee | Count | Percentage | Completion Rate |");
+            sb.AppendLine("|----------|-------|------------|----------------|");
+
+            foreach (var assignee in roleGroup.OrderByDescending(a => a.Value))
+            {
+                var percentage = (double)assignee.Value / analysis.TotalItems * 100;
+                var completed = analysis.CompletedByAssignee.GetValueOrDefault(assignee.Key, 0);
+                var completionRate = assignee.Value > 0 ? (double)completed / assignee.Value * 100 : 0;
+                var escapedAssignee = MarkdownHelper.EscapeTableCell(assignee.Key);
+                sb.AppendLine($"| {escapedAssignee} | {assignee.Value} | {percentage:F2}% | {completionRate:F2}% |");
+            }
+            sb.AppendLine();
         }
-        sb.AppendLine();
 
         sb.AppendLine("### 5. Risk Analysis");
         sb.AppendLine();
@@ -89,6 +104,32 @@ public class CurrentStateSection : IReportSection
         sb.AppendLine();
 
         return sb.ToString();
+    }
+
+    private static Dictionary<string, string> BuildMemberRoleMap(IReadOnlyList<TeamCapacity>? capacities)
+    {
+        var map = new Dictionary<string, string>();
+        if (capacities == null)
+        {
+            return map;
+        }
+
+        foreach (var cap in capacities)
+        {
+            var key = Normalize(cap.DisplayName);
+            if (!map.ContainsKey(key))
+            {
+                map[key] = cap.Activity ?? "Unspecified";
+            }
+        }
+
+        return map;
+    }
+
+    private static string Normalize(string name)
+    {
+        var trimmed = name.Split('<')[0].Trim();
+        return trimmed.ToLowerInvariant();
     }
 }
 

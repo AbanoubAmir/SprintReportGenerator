@@ -59,25 +59,32 @@ public class AzureDevOpsClient : IAzureDevOpsClient
 
     public async Task<SprintData> GetSprintDataAsync(string sprintName, CancellationToken cancellationToken)
     {
-        var (iterationPath, startDate, endDate) = await ResolveIterationAsync(sprintName, cancellationToken);
-        if (string.IsNullOrWhiteSpace(iterationPath))
+        var iterationInfo = await ResolveIterationAsync(sprintName, cancellationToken);
+        if (string.IsNullOrWhiteSpace(iterationInfo.IterationPath))
         {
             return new SprintData
             {
                 WorkItems = Array.Empty<WorkItem>(),
-                StartDate = startDate,
-                EndDate = endDate
+                StartDate = iterationInfo.StartDate,
+                EndDate = iterationInfo.EndDate,
+                IterationId = iterationInfo.IterationId
             };
         }
 
-        var workItemIds = await QueryWorkItemIdsAsync(iterationPath, cancellationToken);
+        var workItemIds = await QueryWorkItemIdsAsync(iterationInfo.IterationPath!, cancellationToken);
         var workItems = await GetWorkItemDetailsAsync(workItemIds, cancellationToken);
+
+        var capacities = string.IsNullOrWhiteSpace(iterationInfo.IterationId)
+            ? Array.Empty<TeamCapacity>()
+            : await GetTeamCapacitiesAsync(iterationInfo.IterationId!, iterationInfo.StartDate, iterationInfo.EndDate, cancellationToken);
 
         return new SprintData
         {
             WorkItems = workItems,
-            StartDate = startDate,
-            EndDate = endDate
+            StartDate = iterationInfo.StartDate,
+            EndDate = iterationInfo.EndDate,
+            IterationId = iterationInfo.IterationId,
+            TeamCapacities = capacities
         };
     }
 
@@ -89,14 +96,14 @@ public class AzureDevOpsClient : IAzureDevOpsClient
             new MediaTypeWithQualityHeaderValue("application/json"));
     }
 
-    private async Task<(string? iterationPath, DateTime? startDate, DateTime? endDate)> ResolveIterationAsync(
+    private async Task<(string? IterationPath, string? IterationId, DateTime? StartDate, DateTime? EndDate)> ResolveIterationAsync(
         string sprintName,
         CancellationToken cancellationToken)
     {
         var iterations = await GetIterationsAsync(cancellationToken);
         if (iterations == null)
         {
-            return (null, null, null);
+            return (null, null, null, null);
         }
 
         JObject? iteration;
@@ -113,14 +120,15 @@ public class AzureDevOpsClient : IAzureDevOpsClient
 
         if (iteration == null)
         {
-            return (null, null, null);
+            return (null, null, null, null);
         }
 
         var path = iteration["path"]?.ToString();
+        var id = iteration["id"]?.ToString();
         var startDate = iteration["attributes"]?["startDate"]?.ToObject<DateTime?>();
         var endDate = iteration["attributes"]?["finishDate"]?.ToObject<DateTime?>();
 
-        return (path, startDate, endDate);
+        return (path, id, startDate, endDate);
     }
 
     private async Task<JArray?> GetIterationsAsync(CancellationToken cancellationToken)
@@ -164,6 +172,100 @@ ORDER BY [System.Id]";
         return workItemIds;
     }
 
+    private async Task<IReadOnlyList<TeamCapacity>> GetTeamCapacitiesAsync(
+        string iterationId,
+        DateTime? startDate,
+        DateTime? endDate,
+        CancellationToken cancellationToken)
+    {
+        var teamSegment = !string.IsNullOrEmpty(teamName)
+            ? $"/{Uri.EscapeDataString(teamName)}"
+            : string.Empty;
+
+        var url =
+            $"{baseUrl}/{organization}/{project}{teamSegment}/_apis/work/teamsettings/iterations/{iterationId}/capacities?api-version=7.1-preview.1";
+
+        var response = await httpClient.GetAsync(url, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var json = JObject.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var capacities = json["value"] as JArray;
+        if (capacities == null)
+        {
+            return Array.Empty<TeamCapacity>();
+        }
+
+        var workingDays = GetWorkingDays(startDate, endDate);
+
+        var entries = new List<TeamCapacity>();
+
+        foreach (var capacity in capacities)
+        {
+            var member = capacity?["teamMember"];
+            var displayName = member?["displayName"]?.ToString() ?? "Unknown";
+            var daysOffArray = capacity?["daysOff"] as JArray;
+            var daysOff = daysOffArray?.Count ?? 0;
+
+            var activities = capacity?["activities"] as JArray;
+            if (activities == null || activities.Count == 0)
+            {
+                entries.Add(new TeamCapacity
+                {
+                    DisplayName = displayName,
+                    Activity = null,
+                    TotalCapacityHours = 0,
+                    DaysOff = daysOff
+                });
+                continue;
+            }
+
+            foreach (var act in activities)
+            {
+                var activityName = act?["name"]?.ToString() ?? "Unspecified";
+                var capacityPerDay = act?["capacityPerDay"]?.ToObject<double?>() ?? 0;
+
+                entries.Add(new TeamCapacity
+                {
+                    DisplayName = displayName,
+                    Activity = activityName,
+                    TotalCapacityHours = capacityPerDay,
+                    DaysOff = daysOff
+                });
+            }
+        }
+
+        // Normalize capacity to hours across the sprint
+        var normalized = entries.Select(e => new TeamCapacity
+        {
+            DisplayName = e.DisplayName,
+            Activity = e.Activity,
+            TotalCapacityHours = workingDays > 0
+                ? e.TotalCapacityHours * Math.Max(0, workingDays - e.DaysOff)
+                : e.TotalCapacityHours,
+            DaysOff = e.DaysOff
+        }).ToList();
+
+        return normalized;
+    }
+
+    private static int GetWorkingDays(DateTime? start, DateTime? end)
+    {
+        if (!start.HasValue || !end.HasValue)
+        {
+            return 0;
+        }
+
+        var days = 0;
+        for (var date = start.Value.Date; date <= end.Value.Date; date = date.AddDays(1))
+        {
+            if (date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+            {
+                continue;
+            }
+            days++;
+        }
+
+        return days;
+    }
     private async Task<IReadOnlyList<WorkItem>> GetWorkItemDetailsAsync(
         IReadOnlyList<int> workItemIds,
         CancellationToken cancellationToken)
