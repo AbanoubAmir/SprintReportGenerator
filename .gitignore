@@ -18,6 +18,7 @@ appsettings.*.json
 # Reports / generated output
 Sprint_Complete_Analysis_*.md
 Sprint_Complete_Analysis_*.txt
+Member_Task_Report_*.md
 
 # OS / tooling
 .DS_Store

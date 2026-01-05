@@ -1,5 +1,6 @@
 using System.Text;
 using System.Linq;
+using Microsoft.Extensions.Logging;
 using SprintReportGenerator.Models;
 
 namespace SprintReportGenerator.Reporting;
@@ -7,14 +8,19 @@ namespace SprintReportGenerator.Reporting;
 public class MarkdownReportBuilder
 {
     private readonly IReadOnlyList<IReportSection> sections;
+    private readonly ILogger<MarkdownReportBuilder> logger;
 
-    public MarkdownReportBuilder(IEnumerable<IReportSection> sections)
+    public MarkdownReportBuilder(IEnumerable<IReportSection> sections, ILogger<MarkdownReportBuilder> logger)
     {
         this.sections = sections.ToList();
+        this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
+
+    public int GetSectionCount() => sections.Count;
 
     public string Build(AnalysisResult analysis, ReportContext context)
     {
+        logger.LogInformation("Building markdown report for sprint: {SprintName}", context.SprintName);
         var sb = new StringBuilder();
         sb.AppendLine($"# Sprint Analysis Report: {context.SprintName}");
         sb.AppendLine();
@@ -33,8 +39,12 @@ public class MarkdownReportBuilder
 
         sb.AppendLine();
 
-        foreach (var section in sections)
+        logger.LogDebug("Rendering {SectionCount} report sections", sections.Count);
+        for (var i = 0; i < sections.Count; i++)
         {
+            var section = sections[i];
+            var sectionType = section.GetType().Name;
+            logger.LogDebug("Rendering section {SectionIndex} of {SectionCount}: {SectionType}", i + 1, sections.Count, sectionType);
             sb.AppendLine("---");
             sb.AppendLine();
             sb.Append(section.Render(analysis, context));
@@ -45,7 +55,9 @@ public class MarkdownReportBuilder
         sb.AppendLine();
         sb.AppendLine("*End of Report*");
 
-        return sb.ToString();
+        var report = sb.ToString();
+        logger.LogInformation("Report built successfully. Report length: {ReportLength} characters", report.Length);
+        return report;
     }
 }
 

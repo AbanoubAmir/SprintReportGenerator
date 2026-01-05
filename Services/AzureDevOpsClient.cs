@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SprintReportGenerator.Models;
@@ -16,14 +17,16 @@ public class AzureDevOpsClient : IAzureDevOpsClient
     private readonly string patToken;
     private readonly string? teamName;
     private readonly string? iterationPath;
+    private readonly ILogger<AzureDevOpsClient> logger;
 
-    public AzureDevOpsClient(AzureDevOpsOptions options)
+    public AzureDevOpsClient(AzureDevOpsOptions options, ILogger<AzureDevOpsClient> logger)
     {
         if (options is null)
         {
             throw new ArgumentNullException(nameof(options));
         }
 
+        this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
         baseUrl = string.IsNullOrWhiteSpace(options.BaseUrl) ? "https://dev.azure.com" : options.BaseUrl;
         organization = options.Organization ?? throw new ArgumentException("Organization is required", nameof(options));
         project = options.Project ?? throw new ArgumentException("Project is required", nameof(options));
@@ -33,6 +36,7 @@ public class AzureDevOpsClient : IAzureDevOpsClient
 
         httpClient = new HttpClient();
         ConfigureHttpClient();
+        logger.LogInformation("Azure DevOps client initialized. BaseUrl: {BaseUrl}, Organization: {Organization}, Project: {Project}", baseUrl, organization, project);
     }
 
     public async Task<string?> GetCurrentSprintNameAsync(CancellationToken cancellationToken)
@@ -44,39 +48,90 @@ public class AzureDevOpsClient : IAzureDevOpsClient
         var url =
             $"{baseUrl}/{organization}/{project}{teamSegment}/_apis/work/teamsettings/iterations?$timeframe=current&api-version=7.1";
 
+        logger.LogInformation("Fetching current sprint name from Azure DevOps. Team: {TeamName}", teamName ?? "default");
         try
         {
             var response = await httpClient.GetStringAsync(url, cancellationToken);
             var json = JObject.Parse(response);
             var iterations = json["value"] as JArray;
-            return iterations?.FirstOrDefault()?["name"]?.ToString();
+            var sprintName = iterations?.FirstOrDefault()?["name"]?.ToString();
+            if (!string.IsNullOrWhiteSpace(sprintName))
+            {
+                logger.LogInformation("Current sprint resolved: {SprintName}", sprintName);
+            }
+            else
+            {
+                logger.LogWarning("No current sprint found in response");
+            }
+            return sprintName;
         }
-        catch
+        catch (Exception ex)
         {
+            logger.LogError(ex, "Error fetching current sprint name from Azure DevOps");
             return null;
         }
     }
 
     public async Task<SprintData> GetSprintDataAsync(string sprintName, CancellationToken cancellationToken)
     {
+        logger.LogInformation("Fetching sprint data for sprint: {SprintName}", sprintName);
         var iterationInfo = await ResolveIterationAsync(sprintName, cancellationToken);
         if (string.IsNullOrWhiteSpace(iterationInfo.IterationPath))
         {
+            logger.LogWarning("Iteration path not found for sprint: {SprintName}", sprintName);
             return new SprintData
             {
                 WorkItems = Array.Empty<WorkItem>(),
                 StartDate = iterationInfo.StartDate,
                 EndDate = iterationInfo.EndDate,
-                IterationId = iterationInfo.IterationId
+                IterationId = iterationInfo.IterationId,
+                IterationPath = null,
+                IterationWorkItemIds = Array.Empty<int>()
             };
         }
 
-        var workItemIds = await QueryWorkItemIdsAsync(iterationInfo.IterationPath!, cancellationToken);
-        var workItems = await GetWorkItemDetailsAsync(workItemIds, cancellationToken);
+        logger.LogInformation("Resolved iteration. Path: {IterationPath}, StartDate: {StartDate}, EndDate: {EndDate}",
+            iterationInfo.IterationPath, iterationInfo.StartDate, iterationInfo.EndDate);
+
+        logger.LogInformation("Querying work item IDs for iteration");
+        var iterationWorkItemIdsTask = QueryWorkItemIdsAsync(iterationInfo.IterationPath!, cancellationToken);
+        
+        Task<IReadOnlyList<WorkItem>>? crossIterationWorkItemsTask = null;
+        if (iterationInfo.StartDate.HasValue && iterationInfo.EndDate.HasValue)
+        {
+            logger.LogInformation("Querying cross-iteration work items changed during sprint period (running in parallel)");
+            crossIterationWorkItemsTask = GetWorkItemsByDateRangeAsync(
+                iterationInfo.StartDate.Value, 
+                iterationInfo.EndDate.Value, 
+                iterationInfo.IterationPath!,
+                cancellationToken);
+        }
+
+        var iterationWorkItemIds = await iterationWorkItemIdsTask;
+        logger.LogInformation("Found {WorkItemCount} work item IDs in iteration", iterationWorkItemIds.Count);
+
+        var allWorkItemIds = new HashSet<int>(iterationWorkItemIds);
+
+        if (crossIterationWorkItemsTask != null)
+        {
+            var crossIterationWorkItems = await crossIterationWorkItemsTask;
+            var crossIterationIds = crossIterationWorkItems.Select(w => w.Id).ToHashSet();
+            logger.LogInformation("Found {CrossIterationCount} cross-iteration work items changed during sprint period", crossIterationIds.Count);
+            
+            allWorkItemIds.UnionWith(crossIterationIds);
+            logger.LogInformation("Total unique work items: {TotalCount} (iteration: {IterationCount}, cross-iteration: {CrossIterationCount})",
+                allWorkItemIds.Count, iterationWorkItemIds.Count, crossIterationIds.Count);
+        }
+
+        logger.LogInformation("Fetching work item details in {BatchCount} batch(es)", (allWorkItemIds.Count + 199) / 200);
+        var workItems = await GetWorkItemDetailsAsync(allWorkItemIds.ToList(), cancellationToken);
+        logger.LogInformation("Retrieved {WorkItemCount} work items", workItems.Count);
 
         var capacities = string.IsNullOrWhiteSpace(iterationInfo.IterationId)
             ? Array.Empty<TeamCapacity>()
             : await GetTeamCapacitiesAsync(iterationInfo.IterationId!, iterationInfo.StartDate, iterationInfo.EndDate, cancellationToken);
+
+        logger.LogInformation("Retrieved {CapacityCount} team capacity entries", capacities.Count);
 
         return new SprintData
         {
@@ -84,6 +139,8 @@ public class AzureDevOpsClient : IAzureDevOpsClient
             StartDate = iterationInfo.StartDate,
             EndDate = iterationInfo.EndDate,
             IterationId = iterationInfo.IterationId,
+            IterationPath = iterationInfo.IterationPath,
+            IterationWorkItemIds = iterationWorkItemIds,
             TeamCapacities = capacities
         };
     }
@@ -139,10 +196,13 @@ public class AzureDevOpsClient : IAzureDevOpsClient
         var url =
             $"{baseUrl}/{organization}/{project}{teamSegment}/_apis/work/teamsettings/iterations?api-version=7.1";
 
+        logger.LogDebug("Fetching iterations from Azure DevOps");
         var response = await httpClient.GetAsync(url, cancellationToken);
         response.EnsureSuccessStatusCode();
         var json = JObject.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
-        return json["value"] as JArray;
+        var iterations = json["value"] as JArray;
+        logger.LogDebug("Retrieved {IterationCount} iterations", iterations?.Count ?? 0);
+        return iterations;
     }
 
     private async Task<IReadOnlyList<int>> QueryWorkItemIdsAsync(string iterationPath, CancellationToken cancellationToken)
@@ -158,6 +218,7 @@ ORDER BY [System.Id]";
         var wiqlBody = new { query = wiql };
         var content = new StringContent(JsonConvert.SerializeObject(wiqlBody), Encoding.UTF8, "application/json");
 
+        logger.LogDebug("Executing WIQL query for iteration path: {IterationPath}", iterationPath);
         var response = await httpClient.PostAsync(wiqlUrl, content, cancellationToken);
         response.EnsureSuccessStatusCode();
         var wiqlJson = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -169,7 +230,90 @@ ORDER BY [System.Id]";
             .Where(id => id > 0)
             .ToList() ?? new List<int>();
 
+        logger.LogDebug("WIQL query returned {WorkItemIdCount} work item IDs", workItemIds.Count);
         return workItemIds;
+    }
+
+    public async Task<IReadOnlyList<WorkItem>> GetWorkItemsByDateRangeAsync(DateTime startDate, DateTime endDate, string excludeIterationPath, CancellationToken cancellationToken)
+    {
+        var startDateStr = startDate.ToString("yyyy-MM-dd");
+        var endDateStr = endDate.AddDays(1).ToString("yyyy-MM-dd");
+        var escapedIterationPath = excludeIterationPath.Replace("'", "''");
+
+        var wiql = $@"
+SELECT [System.Id] 
+FROM WorkItems 
+WHERE [System.TeamProject] = @project 
+  AND [System.ChangedDate] >= '{startDateStr}'
+  AND [System.ChangedDate] < '{endDateStr}'
+  AND [System.IterationPath] <> '{escapedIterationPath}'
+ORDER BY [System.Id]";
+
+        var wiqlUrl = $"{baseUrl}/{organization}/{project}/_apis/wit/wiql?api-version=7.1";
+        var wiqlBody = new { query = wiql };
+        var content = new StringContent(JsonConvert.SerializeObject(wiqlBody), Encoding.UTF8, "application/json");
+
+        logger.LogDebug("Executing optimized WIQL query for cross-iteration work items changed between {StartDate} and {EndDate} (excluding iteration: {IterationPath})", 
+            startDate, endDate, excludeIterationPath);
+        
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var response = await httpClient.PostAsync(wiqlUrl, content, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var wiqlJson = await response.Content.ReadAsStringAsync(cancellationToken);
+        var wiqlResult = JObject.Parse(wiqlJson);
+        stopwatch.Stop();
+        
+        var workItemRefs = wiqlResult["workItems"] as JArray;
+        var workItemIds = workItemRefs?
+            .Select(w => w?["id"]?.ToObject<int>() ?? 0)
+            .Where(id => id > 0)
+            .ToList() ?? new List<int>();
+
+        var continuationToken = wiqlResult["continuationToken"]?.ToString();
+        if (!string.IsNullOrWhiteSpace(continuationToken))
+        {
+            logger.LogInformation("WIQL query returned continuation token, fetching additional pages");
+            var allWorkItemIds = new List<int>(workItemIds);
+            
+            while (!string.IsNullOrWhiteSpace(continuationToken))
+            {
+                var continuationUrl = $"{wiqlUrl}&$continuationToken={Uri.EscapeDataString(continuationToken)}";
+                var continuationResponse = await httpClient.PostAsync(continuationUrl, content, cancellationToken);
+                continuationResponse.EnsureSuccessStatusCode();
+                var continuationJson = await continuationResponse.Content.ReadAsStringAsync(cancellationToken);
+                var continuationResult = JObject.Parse(continuationJson);
+                
+                var continuationRefs = continuationResult["workItems"] as JArray;
+                var continuationIds = continuationRefs?
+                    .Select(w => w?["id"]?.ToObject<int>() ?? 0)
+                    .Where(id => id > 0)
+                    .ToList() ?? new List<int>();
+                
+                allWorkItemIds.AddRange(continuationIds);
+                continuationToken = continuationResult["continuationToken"]?.ToString();
+                logger.LogDebug("Fetched additional page: {ItemCount} items, continuation token: {HasToken}", 
+                    continuationIds.Count, !string.IsNullOrWhiteSpace(continuationToken));
+            }
+            
+            workItemIds = allWorkItemIds;
+        }
+
+        logger.LogInformation("WIQL query completed in {ElapsedMs}ms, returned {WorkItemIdCount} work item IDs", 
+            stopwatch.ElapsedMilliseconds, workItemIds.Count);
+
+        if (workItemIds.Count == 0)
+        {
+            return Array.Empty<WorkItem>();
+        }
+
+        logger.LogDebug("Fetching details for {WorkItemCount} cross-iteration work items", workItemIds.Count);
+        stopwatch.Restart();
+        var workItems = await GetWorkItemDetailsAsync(workItemIds, cancellationToken);
+        stopwatch.Stop();
+        logger.LogInformation("Retrieved {WorkItemCount} cross-iteration work items in {ElapsedMs}ms", 
+            workItems.Count, stopwatch.ElapsedMilliseconds);
+        
+        return workItems;
     }
 
     private async Task<IReadOnlyList<TeamCapacity>> GetTeamCapacitiesAsync(
@@ -185,12 +329,14 @@ ORDER BY [System.Id]";
         var url =
             $"{baseUrl}/{organization}/{project}{teamSegment}/_apis/work/teamsettings/iterations/{iterationId}/capacities?api-version=7.1-preview.1";
 
+        logger.LogDebug("Fetching team capacities for iteration: {IterationId}", iterationId);
         var response = await httpClient.GetAsync(url, cancellationToken);
         response.EnsureSuccessStatusCode();
         var json = JObject.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
         var capacities = json["value"] as JArray;
         if (capacities == null)
         {
+            logger.LogDebug("No team capacities found for iteration: {IterationId}", iterationId);
             return Array.Empty<TeamCapacity>();
         }
 
@@ -278,57 +424,78 @@ ORDER BY [System.Id]";
         var batches = workItemIds.Chunk(200).ToList();
         var allWorkItems = new List<WorkItem>();
 
-        foreach (var batch in batches)
+        logger.LogDebug("Fetching work item details in {BatchCount} batch(es) using parallel processing", batches.Count);
+        
+        const int maxConcurrency = 5;
+        var semaphore = new SemaphoreSlim(maxConcurrency);
+        var tasks = batches.Select(async (batch, batchIndex) =>
         {
-            var ids = string.Join(",", batch);
-            var url =
-                $"{baseUrl}/{organization}/{project}/_apis/wit/workitems?ids={ids}&$expand=all&api-version=7.1";
-
-            var response = await httpClient.GetAsync(url, cancellationToken);
-            response.EnsureSuccessStatusCode();
-            var json = JObject.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
-            var items = json["value"] as JArray;
-
-            foreach (var item in items ?? new JArray())
+            await semaphore.WaitAsync(cancellationToken);
+            try
             {
-                var fields = item?["fields"] as JObject;
-                if (fields == null)
+                var ids = string.Join(",", batch);
+                var url =
+                    $"{baseUrl}/{organization}/{project}/_apis/wit/workitems?ids={ids}&$expand=all&api-version=7.1";
+
+                logger.LogDebug("Fetching batch {BatchIndex} of {BatchCount} ({BatchSize} items)", batchIndex + 1, batches.Count, batch.Length);
+                var response = await httpClient.GetAsync(url, cancellationToken);
+                response.EnsureSuccessStatusCode();
+                var json = JObject.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+                var items = json["value"] as JArray;
+
+                var batchWorkItems = new List<WorkItem>();
+                foreach (var item in items ?? new JArray())
                 {
-                    continue;
+                    var fields = item?["fields"] as JObject;
+                    if (fields == null)
+                    {
+                        logger.LogWarning("Work item {WorkItemId} has no fields, skipping", item?["id"]?.ToObject<int>());
+                        continue;
+                    }
+
+                    var parentId = ResolveParentId(item);
+
+                    var workItem = new WorkItem
+                    {
+                        Id = item?["id"]?.ToObject<int>() ?? 0,
+                        Title = fields["System.Title"]?.ToString() ?? string.Empty,
+                        State = fields["System.State"]?.ToString() ?? string.Empty,
+                        WorkItemType = fields["System.WorkItemType"]?.ToString() ?? string.Empty,
+                        AssignedTo = fields["System.AssignedTo"]?["displayName"]?.ToString() ?? "Unassigned",
+                        AssignedToUniqueName = fields["System.AssignedTo"]?["uniqueName"]?.ToString(),
+                        ActivatedBy = fields["Microsoft.VSTS.Common.ActivatedBy"]?["displayName"]?.ToString(),
+                        ActivatedByUniqueName = fields["Microsoft.VSTS.Common.ActivatedBy"]?["uniqueName"]?.ToString(),
+                        ResolvedBy = fields["Microsoft.VSTS.Common.ResolvedBy"]?["displayName"]?.ToString(),
+                        ResolvedByUniqueName = fields["Microsoft.VSTS.Common.ResolvedBy"]?["uniqueName"]?.ToString(),
+                        ClosedBy = fields["Microsoft.VSTS.Common.ClosedBy"]?["displayName"]?.ToString(),
+                        ClosedByUniqueName = fields["Microsoft.VSTS.Common.ClosedBy"]?["uniqueName"]?.ToString(),
+                        Priority = fields["Microsoft.VSTS.Common.Priority"]?.ToObject<int?>() ?? 2,
+                        AreaPath = fields["System.AreaPath"]?.ToString() ?? string.Empty,
+                        Reason = fields["System.Reason"]?.ToString() ?? string.Empty,
+                        CreatedDate = fields["System.CreatedDate"]?.ToObject<DateTime?>(),
+                        ChangedDate = fields["System.ChangedDate"]?.ToObject<DateTime?>(),
+                        ClosedDate = fields["Microsoft.VSTS.Common.ClosedDate"]?.ToObject<DateTime?>(),
+                        OriginalEstimate = fields["Microsoft.VSTS.Scheduling.OriginalEstimate"]?.ToObject<double?>(),
+                        CompletedWork = fields["Microsoft.VSTS.Scheduling.CompletedWork"]?.ToObject<double?>(),
+                        RemainingWork = fields["Microsoft.VSTS.Scheduling.RemainingWork"]?.ToObject<double?>(),
+                        ParentId = parentId
+                    };
+
+                    batchWorkItems.Add(workItem);
                 }
-
-                var parentId = ResolveParentId(item);
-
-                var workItem = new WorkItem
-                {
-                    Id = item?["id"]?.ToObject<int>() ?? 0,
-                    Title = fields["System.Title"]?.ToString() ?? string.Empty,
-                    State = fields["System.State"]?.ToString() ?? string.Empty,
-                    WorkItemType = fields["System.WorkItemType"]?.ToString() ?? string.Empty,
-                    AssignedTo = fields["System.AssignedTo"]?["displayName"]?.ToString() ?? "Unassigned",
-                    AssignedToUniqueName = fields["System.AssignedTo"]?["uniqueName"]?.ToString(),
-                    ActivatedBy = fields["Microsoft.VSTS.Common.ActivatedBy"]?["displayName"]?.ToString(),
-                    ActivatedByUniqueName = fields["Microsoft.VSTS.Common.ActivatedBy"]?["uniqueName"]?.ToString(),
-                    ResolvedBy = fields["Microsoft.VSTS.Common.ResolvedBy"]?["displayName"]?.ToString(),
-                    ResolvedByUniqueName = fields["Microsoft.VSTS.Common.ResolvedBy"]?["uniqueName"]?.ToString(),
-                    ClosedBy = fields["Microsoft.VSTS.Common.ClosedBy"]?["displayName"]?.ToString(),
-                    ClosedByUniqueName = fields["Microsoft.VSTS.Common.ClosedBy"]?["uniqueName"]?.ToString(),
-                    Priority = fields["Microsoft.VSTS.Common.Priority"]?.ToObject<int?>() ?? 2,
-                    AreaPath = fields["System.AreaPath"]?.ToString() ?? string.Empty,
-                    Reason = fields["System.Reason"]?.ToString() ?? string.Empty,
-                    CreatedDate = fields["System.CreatedDate"]?.ToObject<DateTime?>(),
-                    ChangedDate = fields["System.ChangedDate"]?.ToObject<DateTime?>(),
-                    ClosedDate = fields["Microsoft.VSTS.Common.ClosedDate"]?.ToObject<DateTime?>(),
-                    OriginalEstimate = fields["Microsoft.VSTS.Scheduling.OriginalEstimate"]?.ToObject<double?>(),
-                    CompletedWork = fields["Microsoft.VSTS.Scheduling.CompletedWork"]?.ToObject<double?>(),
-                    RemainingWork = fields["Microsoft.VSTS.Scheduling.RemainingWork"]?.ToObject<double?>(),
-                    ParentId = parentId
-                };
-
-                allWorkItems.Add(workItem);
+                logger.LogDebug("Processed batch {BatchIndex} of {BatchCount} ({BatchSize} items)", batchIndex + 1, batches.Count, batchWorkItems.Count);
+                return batchWorkItems;
             }
-        }
+            finally
+            {
+                semaphore.Release();
+            }
+        }).ToList();
 
+        var results = await Task.WhenAll(tasks);
+        allWorkItems.AddRange(results.SelectMany(r => r));
+
+        logger.LogDebug("Completed fetching all work item details. Total items: {TotalItems}", allWorkItems.Count);
         return allWorkItems;
     }
 

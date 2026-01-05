@@ -1,15 +1,27 @@
 using System.Linq;
+using Microsoft.Extensions.Logging;
 using SprintReportGenerator.Models;
 
 namespace SprintReportGenerator.Analysis;
 
 public class WorkItemAnalyzer : IWorkItemAnalyzer
 {
+    private readonly ILogger<WorkItemAnalyzer> logger;
+
+    public WorkItemAnalyzer(ILogger<WorkItemAnalyzer> logger)
+    {
+        this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
     public AnalysisResult Analyze(IEnumerable<WorkItem> workItems, DateTime? sprintStartDate)
     {
+        var workItemsList = workItems.ToList();
+        logger.LogInformation("Starting work item analysis. Work item count: {WorkItemCount}, Sprint start date: {SprintStartDate}",
+            workItemsList.Count, sprintStartDate);
+
         var result = new AnalysisResult
         {
-            WorkItems = workItems.ToList(),
+            WorkItems = workItemsList,
             SprintStartDate = sprintStartDate
         };
 
@@ -87,6 +99,12 @@ public class WorkItemAnalyzer : IWorkItemAnalyzer
         }
 
         result.TotalItems = result.WorkItems.Count;
+        
+        logger.LogInformation("Analysis complete. Total: {TotalItems}, Completed: {CompletedCount}, In Progress: {InProgressCount}, Not Started: {NotStartedCount}, Blocked: {BlockedCount}, Original Plan: {OriginalPlanCount}, Added: {AddedCount}",
+            result.TotalItems, result.CompletedCount, result.InProgressCount, result.NotStartedCount, result.BlockedCount, result.OriginalPlanItems.Count, result.AddedItems.Count);
+        logger.LogInformation("Work breakdown - Original Estimate: {OriginalEstimate}h, Completed Work: {CompletedWork}h, Remaining Work: {RemainingWork}h",
+            result.TotalOriginalEstimate, result.TotalCompletedWork, result.TotalRemainingWork);
+        
         return result;
     }
 }
