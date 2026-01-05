@@ -82,6 +82,25 @@ public class MemberTaskReportBuilder
                     }
                 }
                 
+                if (!wasActiveDuringSprint && !wasActiveAfterSprint)
+                {
+                    return false;
+                }
+                
+                if (normalizedFilters.Any())
+                {
+                    var hasEffort = (w.CompletedWork.HasValue && w.CompletedWork.Value > 0) ||
+                                   (w.RemainingWork.HasValue && w.RemainingWork.Value > 0) ||
+                                   (w.OriginalEstimate.HasValue && w.OriginalEstimate.Value > 0);
+                    
+                    if (!hasEffort)
+                    {
+                        logger.LogDebug("Excluding work item {WorkItemId} - no effort tracked (CompletedWork: {CompletedWork}, RemainingWork: {RemainingWork}, OriginalEstimate: {OriginalEstimate})",
+                            w.Id, w.CompletedWork, w.RemainingWork, w.OriginalEstimate);
+                        return false;
+                    }
+                }
+                
                 return wasActiveDuringSprint || wasActiveAfterSprint;
             }
 

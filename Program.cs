@@ -163,7 +163,7 @@ class Program
 
         Console.WriteLine("Analyzing data...");
         var analyzer = new WorkItemAnalyzer(loggerFactory.CreateLogger<WorkItemAnalyzer>());
-        var analysis = analyzer.Analyze(sprintData.WorkItems, sprintData.StartDate);
+        var analysis = analyzer.Analyze(sprintData.WorkItems, sprintData.StartDate, sprintData.IterationWorkItemIds);
 
         logger.LogInformation("Analysis complete. Total items: {TotalItems}, Completed: {CompletedCount}, In Progress: {InProgressCount}, Not Started: {NotStartedCount}",
             analysis.TotalItems, analysis.CompletedCount, analysis.InProgressCount, analysis.NotStartedCount);
@@ -197,6 +197,7 @@ class Program
             new CurrentStateSection(),
             new CompletionSection(),
             new PlanVsActualSection(),
+            new CrossIterationWorkSection(),
             new CapacitySection(),
             new TaskEstimatesSection(),
             new UserStoriesSection(),

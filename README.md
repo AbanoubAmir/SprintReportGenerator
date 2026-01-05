@@ -138,14 +138,15 @@ dotnet run -- --help
 ### Member Task Report
 - Generates `Member_Task_Report_<sprint>_<date>.md` when `--member-report` is used.
 - Includes all work item types (not just Tasks and Bugs).
-- Tracks cross-iteration work done during the sprint period.
+- Tracks cross-iteration work done during the sprint period with actual effort verification.
 - Grouped by team member with:
   - Total items, completed items
   - Original estimates, completed work, remaining work
   - Detailed task/bug listing with parent work items
   - Status, dates, and assignments
 - Honors member filters from CLI or `Report:MemberFilters` in `appsettings.json`.
-- Includes work items that were active during the sprint period, even if they're in different iterations.
+- Includes work items that were actively worked on during the sprint period (verified through revision history), even if they're in different iterations.
+- Excludes items with no effort tracked to ensure accuracy.
 
 ## Architecture (extensible)
 - **Data**: `IAzureDevOpsClient` / `AzureDevOpsClient`
@@ -182,7 +183,14 @@ git push -u origin main
 ## Advanced Features
 
 ### Cross-Iteration Work Tracking
-The tool automatically includes work items that were changed during the sprint period, even if they're assigned to different iterations. This ensures comprehensive tracking of all team effort during the sprint.
+The tool automatically includes work items that were actively worked on by team members during the sprint period, even if they're assigned to different iterations. To ensure accuracy, the tool verifies actual work through revision history:
+
+- **Effort Changes**: Items where team members logged effort (CompletedWork, RemainingWork, or OriginalEstimate changes)
+- **State Changes**: Items where team members changed state to meaningful work states (Active, In Progress, Resolved, Closed, Done)
+- **Assignments**: Items assigned to team members during the sprint period
+- **Resolutions/Closures**: Items resolved or closed by team members during the sprint
+
+This ensures that only items with actual work done by team members are included, excluding items that were merely touched or had metadata changes without real effort.
 
 ### All Work Item Types
 Reports include all work item types (Tasks, Bugs, Features, Epics, Issues, Code Reviews, etc.), not just Tasks and Bugs. This provides a complete picture of team activity.
@@ -192,6 +200,8 @@ Reports include all work item types (Tasks, Bugs, Features, Epics, Issues, Code 
 - Optimized WIQL queries that exclude already-fetched items
 - Parallel batch processing for work item details
 - Automatic pagination support for large datasets
+- Parallel revision checking for cross-iteration work verification (max 10 concurrent requests)
+- Pre-filtering to reduce unnecessary revision checks
 
 ## Troubleshooting
 

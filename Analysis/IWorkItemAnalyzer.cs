@@ -4,6 +4,6 @@ namespace SprintReportGenerator.Analysis;
 
 public interface IWorkItemAnalyzer
 {
-    AnalysisResult Analyze(IEnumerable<WorkItem> workItems, DateTime? sprintStartDate);
+    AnalysisResult Analyze(IEnumerable<WorkItem> workItems, DateTime? sprintStartDate, IReadOnlyList<int>? sprintIterationWorkItemIds = null);
 }
 

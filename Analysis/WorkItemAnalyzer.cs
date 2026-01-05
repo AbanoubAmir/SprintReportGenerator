@@ -13,11 +13,13 @@ public class WorkItemAnalyzer : IWorkItemAnalyzer
         this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public AnalysisResult Analyze(IEnumerable<WorkItem> workItems, DateTime? sprintStartDate)
+    public AnalysisResult Analyze(IEnumerable<WorkItem> workItems, DateTime? sprintStartDate, IReadOnlyList<int>? sprintIterationWorkItemIds = null)
     {
         var workItemsList = workItems.ToList();
-        logger.LogInformation("Starting work item analysis. Work item count: {WorkItemCount}, Sprint start date: {SprintStartDate}",
-            workItemsList.Count, sprintStartDate);
+        var iterationIds = sprintIterationWorkItemIds?.ToHashSet() ?? new HashSet<int>();
+        
+        logger.LogInformation("Starting work item analysis. Work item count: {WorkItemCount}, Sprint start date: {SprintStartDate}, Sprint iteration items: {IterationItemCount}",
+            workItemsList.Count, sprintStartDate, iterationIds.Count);
 
         var result = new AnalysisResult
         {
@@ -27,6 +29,16 @@ public class WorkItemAnalyzer : IWorkItemAnalyzer
 
         foreach (var item in result.WorkItems)
         {
+            var isInSprintIteration = iterationIds.Contains(item.Id);
+            if (isInSprintIteration)
+            {
+                result.SprintIterationItems.Add(item);
+            }
+            else
+            {
+                result.CrossIterationItems.Add(item);
+            }
+
             var isOriginalPlan = !sprintStartDate.HasValue ||
                                  !item.CreatedDate.HasValue ||
                                  item.CreatedDate.Value < sprintStartDate.Value.AddDays(1);

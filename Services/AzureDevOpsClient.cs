@@ -96,6 +96,48 @@ public class AzureDevOpsClient : IAzureDevOpsClient
         logger.LogInformation("Querying work item IDs for iteration");
         var iterationWorkItemIdsTask = QueryWorkItemIdsAsync(iterationInfo.IterationPath!, cancellationToken);
         
+        var capacities = string.IsNullOrWhiteSpace(iterationInfo.IterationId)
+            ? Array.Empty<TeamCapacity>()
+            : await GetTeamCapacitiesAsync(iterationInfo.IterationId!, iterationInfo.StartDate, iterationInfo.EndDate, cancellationToken);
+
+        logger.LogInformation("Retrieved {CapacityCount} team capacity entries", capacities.Count);
+
+        var allTeamIdentifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        
+        foreach (var capacity in capacities)
+        {
+            var displayName = capacity.DisplayName?.Trim() ?? string.Empty;
+            var uniqueName = capacity.UniqueName?.Trim() ?? string.Empty;
+            
+            if (!string.IsNullOrWhiteSpace(displayName))
+            {
+                if (displayName.Contains('<') && displayName.Contains('>'))
+                {
+                    var parts = displayName.Split(new[] { '<', '>' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 1)
+                    {
+                        allTeamIdentifiers.Add(parts[0].Trim());
+                    }
+                    if (parts.Length >= 2)
+                    {
+                        allTeamIdentifiers.Add(parts[1].Trim());
+                    }
+                }
+                else
+                {
+                    allTeamIdentifiers.Add(displayName);
+                }
+            }
+            
+            if (!string.IsNullOrWhiteSpace(uniqueName))
+            {
+                allTeamIdentifiers.Add(uniqueName);
+            }
+        }
+
+        logger.LogInformation("Identified {TeamMemberCount} team member identifiers for filtering (display names and unique names)", 
+            allTeamIdentifiers.Count);
+
         Task<IReadOnlyList<WorkItem>>? crossIterationWorkItemsTask = null;
         if (iterationInfo.StartDate.HasValue && iterationInfo.EndDate.HasValue)
         {
@@ -104,6 +146,7 @@ public class AzureDevOpsClient : IAzureDevOpsClient
                 iterationInfo.StartDate.Value, 
                 iterationInfo.EndDate.Value, 
                 iterationInfo.IterationPath!,
+                allTeamIdentifiers,
                 cancellationToken);
         }
 
@@ -116,7 +159,7 @@ public class AzureDevOpsClient : IAzureDevOpsClient
         {
             var crossIterationWorkItems = await crossIterationWorkItemsTask;
             var crossIterationIds = crossIterationWorkItems.Select(w => w.Id).ToHashSet();
-            logger.LogInformation("Found {CrossIterationCount} cross-iteration work items changed during sprint period", crossIterationIds.Count);
+            logger.LogInformation("Found {CrossIterationCount} cross-iteration work items changed during sprint period by team members", crossIterationIds.Count);
             
             allWorkItemIds.UnionWith(crossIterationIds);
             logger.LogInformation("Total unique work items: {TotalCount} (iteration: {IterationCount}, cross-iteration: {CrossIterationCount})",
@@ -126,12 +169,6 @@ public class AzureDevOpsClient : IAzureDevOpsClient
         logger.LogInformation("Fetching work item details in {BatchCount} batch(es)", (allWorkItemIds.Count + 199) / 200);
         var workItems = await GetWorkItemDetailsAsync(allWorkItemIds.ToList(), cancellationToken);
         logger.LogInformation("Retrieved {WorkItemCount} work items", workItems.Count);
-
-        var capacities = string.IsNullOrWhiteSpace(iterationInfo.IterationId)
-            ? Array.Empty<TeamCapacity>()
-            : await GetTeamCapacitiesAsync(iterationInfo.IterationId!, iterationInfo.StartDate, iterationInfo.EndDate, cancellationToken);
-
-        logger.LogInformation("Retrieved {CapacityCount} team capacity entries", capacities.Count);
 
         return new SprintData
         {
@@ -234,7 +271,7 @@ ORDER BY [System.Id]";
         return workItemIds;
     }
 
-    public async Task<IReadOnlyList<WorkItem>> GetWorkItemsByDateRangeAsync(DateTime startDate, DateTime endDate, string excludeIterationPath, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<WorkItem>> GetWorkItemsByDateRangeAsync(DateTime startDate, DateTime endDate, string excludeIterationPath, HashSet<string> teamMemberNames, CancellationToken cancellationToken)
     {
         var startDateStr = startDate.ToString("yyyy-MM-dd");
         var endDateStr = endDate.AddDays(1).ToString("yyyy-MM-dd");
@@ -308,12 +345,267 @@ ORDER BY [System.Id]";
 
         logger.LogDebug("Fetching details for {WorkItemCount} cross-iteration work items", workItemIds.Count);
         stopwatch.Restart();
-        var workItems = await GetWorkItemDetailsAsync(workItemIds, cancellationToken);
+        var allWorkItems = await GetWorkItemDetailsAsync(workItemIds, cancellationToken);
         stopwatch.Stop();
         logger.LogInformation("Retrieved {WorkItemCount} cross-iteration work items in {ElapsedMs}ms", 
-            workItems.Count, stopwatch.ElapsedMilliseconds);
+            allWorkItems.Count, stopwatch.ElapsedMilliseconds);
+
+        if (teamMemberNames.Count == 0)
+        {
+            logger.LogWarning("No team members identified, returning all cross-iteration work items");
+            return allWorkItems;
+        }
+
+        logger.LogInformation("Pre-filtering cross-iteration work items by team member association and effort indicators");
         
-        return workItems;
+        var sprintStartDate = startDate;
+        var sprintEndDate = endDate.AddDays(1);
+        
+        var preFilteredItems = allWorkItems.Where(w =>
+        {
+            var assignedTo = NormalizeName(w.AssignedTo);
+            var assignedToUnique = NormalizeName(w.AssignedToUniqueName);
+            var resolvedBy = NormalizeName(w.ResolvedBy);
+            var resolvedByUnique = NormalizeName(w.ResolvedByUniqueName);
+            var closedBy = NormalizeName(w.ClosedBy);
+            var closedByUnique = NormalizeName(w.ClosedByUniqueName);
+            var activatedBy = NormalizeName(w.ActivatedBy);
+            var activatedByUnique = NormalizeName(w.ActivatedByUniqueName);
+
+            var isAssociatedWithTeam = teamMemberNames.Contains(assignedTo) ||
+                                      teamMemberNames.Contains(assignedToUnique) ||
+                                      teamMemberNames.Contains(resolvedBy) ||
+                                      teamMemberNames.Contains(resolvedByUnique) ||
+                                      teamMemberNames.Contains(closedBy) ||
+                                      teamMemberNames.Contains(closedByUnique) ||
+                                      teamMemberNames.Contains(activatedBy) ||
+                                      teamMemberNames.Contains(activatedByUnique);
+
+            if (!isAssociatedWithTeam)
+            {
+                return false;
+            }
+            
+            var hasEffort = (w.CompletedWork.HasValue && w.CompletedWork.Value > 0) ||
+                           (w.RemainingWork.HasValue && w.RemainingWork.Value > 0) ||
+                           (w.OriginalEstimate.HasValue && w.OriginalEstimate.Value > 0);
+            
+            var wasClosedDuringSprint = w.ClosedDate.HasValue &&
+                                       w.ClosedDate.Value >= sprintStartDate &&
+                                       w.ClosedDate.Value < sprintEndDate &&
+                                       (teamMemberNames.Contains(closedBy) || teamMemberNames.Contains(closedByUnique));
+            
+            var wasResolvedDuringSprint = !string.IsNullOrWhiteSpace(w.ResolvedBy) &&
+                                         (teamMemberNames.Contains(resolvedBy) || teamMemberNames.Contains(resolvedByUnique));
+            
+            var wasActivatedDuringSprint = !string.IsNullOrWhiteSpace(w.ActivatedBy) &&
+                                          (teamMemberNames.Contains(activatedBy) || teamMemberNames.Contains(activatedByUnique));
+            
+            var wasAssignedToTeamMember = (teamMemberNames.Contains(assignedTo) || teamMemberNames.Contains(assignedToUnique)) &&
+                                         w.ChangedDate.HasValue &&
+                                         w.ChangedDate.Value >= sprintStartDate &&
+                                         w.ChangedDate.Value < sprintEndDate;
+            
+            if (hasEffort || wasClosedDuringSprint || wasResolvedDuringSprint || wasActivatedDuringSprint || wasAssignedToTeamMember)
+            {
+                return true;
+            }
+            
+            return false;
+        }).ToList();
+
+        logger.LogInformation("Pre-filtered from {TotalCount} to {PreFilteredCount} items associated with team members", 
+            allWorkItems.Count, preFilteredItems.Count);
+
+        if (preFilteredItems.Count == 0)
+        {
+            return Array.Empty<WorkItem>();
+        }
+
+        logger.LogInformation("Checking revisions to identify items with actual work by team members during sprint period");
+        
+        const int maxConcurrency = 10;
+        var semaphore = new SemaphoreSlim(maxConcurrency);
+        var teamWorkItems = new List<WorkItem>();
+        
+        var tasks = preFilteredItems.Select(async workItem =>
+        {
+            await semaphore.WaitAsync(cancellationToken);
+            try
+            {
+                var hasActualWork = await HasActualWorkByTeamMembersAsync(
+                    workItem.Id, 
+                    sprintStartDate, 
+                    sprintEndDate, 
+                    teamMemberNames, 
+                    cancellationToken);
+                
+                if (hasActualWork)
+                {
+                    lock (teamWorkItems)
+                    {
+                        teamWorkItems.Add(workItem);
+                    }
+                }
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        }).ToList();
+
+        await Task.WhenAll(tasks);
+
+        logger.LogInformation("Filtered from {PreFilteredCount} to {TeamCount} cross-iteration work items with actual work by team members during sprint period", 
+            preFilteredItems.Count, teamWorkItems.Count);
+        
+        return teamWorkItems;
+    }
+
+    private async Task<bool> HasActualWorkByTeamMembersAsync(
+        int workItemId,
+        DateTime sprintStartDate,
+        DateTime sprintEndDate,
+        HashSet<string> teamMemberNames,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var url = $"{baseUrl}/{organization}/{project}/_apis/wit/workitems/{workItemId}/updates?api-version=7.1";
+            var response = await httpClient.GetAsync(url, cancellationToken);
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.LogDebug("Could not fetch revisions for work item {WorkItemId}, status: {StatusCode}", workItemId, response.StatusCode);
+                return false;
+            }
+            
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            var updates = JObject.Parse(json);
+            var value = updates["value"] as JArray;
+            
+            if (value == null || value.Count == 0)
+            {
+                return false;
+            }
+            
+            foreach (var update in value)
+            {
+                var revisedDate = update?["revisedDate"]?.ToObject<DateTime?>();
+                if (!revisedDate.HasValue)
+                {
+                    continue;
+                }
+                
+                if (revisedDate.Value < sprintStartDate || revisedDate.Value >= sprintEndDate)
+                {
+                    continue;
+                }
+                
+                var revisedBy = update?["revisedBy"]?["displayName"]?.ToString();
+                var revisedByUnique = update?["revisedBy"]?["uniqueName"]?.ToString();
+                
+                var revisedByNormalized = NormalizeName(revisedBy);
+                var revisedByUniqueNormalized = NormalizeName(revisedByUnique);
+                
+                if (!teamMemberNames.Contains(revisedByNormalized) && 
+                    !teamMemberNames.Contains(revisedByUniqueNormalized))
+                {
+                    continue;
+                }
+                
+                var fields = update?["fields"] as JObject;
+                if (fields == null)
+                {
+                    continue;
+                }
+                
+                foreach (var field in fields)
+                {
+                    var fieldName = field.Key;
+                    var fieldValue = field.Value;
+                    
+                    if (fieldValue == null)
+                    {
+                        continue;
+                    }
+                    
+                    var newValue = fieldValue["newValue"];
+                    var oldValue = fieldValue["oldValue"];
+                    
+                    if (fieldName.Equals("Microsoft.VSTS.Scheduling.CompletedWork", StringComparison.OrdinalIgnoreCase) ||
+                        fieldName.Equals("Microsoft.VSTS.Scheduling.RemainingWork", StringComparison.OrdinalIgnoreCase) ||
+                        fieldName.Equals("Microsoft.VSTS.Scheduling.OriginalEstimate", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var newWorkValue = newValue?.ToObject<double?>();
+                        var oldWorkValue = oldValue?.ToObject<double?>();
+                        
+                        if (newWorkValue.HasValue && oldWorkValue.HasValue && newWorkValue.Value != oldWorkValue.Value)
+                        {
+                            logger.LogDebug("Work item {WorkItemId} has effort change by team member {Member} during sprint", 
+                                workItemId, revisedBy ?? revisedByUnique);
+                            return true;
+                        }
+                    }
+                    
+                    if (fieldName.Equals("System.State", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var newState = newValue?.ToString();
+                        var oldState = oldValue?.ToString();
+                        
+                        if (!string.IsNullOrWhiteSpace(newState) && 
+                            !string.IsNullOrWhiteSpace(oldState) && 
+                            !newState.Equals(oldState, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var meaningfulStates = new[] { "Active", "In Progress", "Resolved", "Closed", "Done" };
+                            if (meaningfulStates.Any(s => newState.Equals(s, StringComparison.OrdinalIgnoreCase)) ||
+                                meaningfulStates.Any(s => oldState.Equals(s, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                logger.LogDebug("Work item {WorkItemId} has state change by team member {Member} during sprint: {OldState} -> {NewState}", 
+                                    workItemId, revisedBy ?? revisedByUnique, oldState, newState);
+                                return true;
+                            }
+                        }
+                    }
+                    
+                    if (fieldName.Equals("System.AssignedTo", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var newAssignee = newValue?["displayName"]?.ToString();
+                        var newAssigneeUnique = newValue?["uniqueName"]?.ToString();
+                        var oldAssignee = oldValue?["displayName"]?.ToString();
+                        var oldAssigneeUnique = oldValue?["uniqueName"]?.ToString();
+                        
+                        var newAssigneeNormalized = NormalizeName(newAssignee);
+                        var newAssigneeUniqueNormalized = NormalizeName(newAssigneeUnique);
+                        
+                        if (teamMemberNames.Contains(newAssigneeNormalized) || 
+                            teamMemberNames.Contains(newAssigneeUniqueNormalized))
+                        {
+                            if (!string.IsNullOrWhiteSpace(newAssignee) && 
+                                (string.IsNullOrWhiteSpace(oldAssignee) || 
+                                 !newAssignee.Equals(oldAssignee, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                logger.LogDebug("Work item {WorkItemId} was assigned to team member {Member} during sprint", 
+                                    workItemId, newAssignee ?? newAssigneeUnique);
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error checking revisions for work item {WorkItemId}", workItemId);
+            return false;
+        }
+    }
+
+    private static string NormalizeName(string? value)
+    {
+        return (value ?? string.Empty).Trim();
     }
 
     private async Task<IReadOnlyList<TeamCapacity>> GetTeamCapacitiesAsync(
@@ -348,6 +640,7 @@ ORDER BY [System.Id]";
         {
             var member = capacity?["teamMember"];
             var displayName = member?["displayName"]?.ToString() ?? "Unknown";
+            var uniqueName = member?["uniqueName"]?.ToString();
             var daysOffArray = capacity?["daysOff"] as JArray;
             var daysOff = daysOffArray?.Count ?? 0;
 
@@ -357,6 +650,7 @@ ORDER BY [System.Id]";
                 entries.Add(new TeamCapacity
                 {
                     DisplayName = displayName,
+                    UniqueName = uniqueName,
                     Activity = null,
                     TotalCapacityHours = 0,
                     DaysOff = daysOff
@@ -372,6 +666,7 @@ ORDER BY [System.Id]";
                 entries.Add(new TeamCapacity
                 {
                     DisplayName = displayName,
+                    UniqueName = uniqueName,
                     Activity = activityName,
                     TotalCapacityHours = capacityPerDay,
                     DaysOff = daysOff

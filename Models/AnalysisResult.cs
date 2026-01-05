@@ -32,6 +32,8 @@ public class AnalysisResult
     public List<WorkItem> WorkItems { get; set; } = new();
     public List<WorkItem> OriginalPlanItems { get; set; } = new();
     public List<WorkItem> AddedItems { get; set; } = new();
+    public List<WorkItem> SprintIterationItems { get; set; } = new();
+    public List<WorkItem> CrossIterationItems { get; set; } = new();
     public DateTime? SprintStartDate { get; set; }
 }
 
