@@ -58,6 +58,7 @@ Creates `Member_Task_Report_<sprint>_<date>.md` grouped by team member with task
 ```bash
 dotnet run -- --member-report "Sprint Name" --members "Name 1;Name 2;Name 3"
 ```
+- If no `--members` are provided and `Report:MemberFilters` is empty, the member report includes everyone. To keep names out of source control, set filters in `appsettings.local.json` (gitignored).
 
 ## Output
 - Generates `Sprint_Complete_Analysis_<MMM_d_yyyy>.md` in the working directory.
