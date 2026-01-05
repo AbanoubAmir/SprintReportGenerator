@@ -1,0 +1,25 @@
+# Build artifacts
+bin/
+obj/
+**/bin/
+**/obj/
+
+# User-specific files
+*.user
+*.suo
+.vs/
+
+# Configuration & secrets
+appsettings.json
+appsettings.*.json
+!appsettings.Template.json
+
+# Reports / generated output
+Sprint_Complete_Analysis_*.md
+Sprint_Complete_Analysis_*.txt
+
+# OS / tooling
+.DS_Store
+Thumbs.db
+
+
