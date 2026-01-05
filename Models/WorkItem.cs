@@ -9,6 +9,7 @@ public class WorkItem
     public string AssignedTo { get; set; } = string.Empty;
     public int Priority { get; set; }
     public string AreaPath { get; set; } = string.Empty;
+    public string Reason { get; set; } = string.Empty;
     public DateTime? CreatedDate { get; set; }
     public DateTime? ChangedDate { get; set; }
     public double? OriginalEstimate { get; set; }

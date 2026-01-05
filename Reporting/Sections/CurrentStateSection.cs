@@ -78,7 +78,8 @@ public class CurrentStateSection : IReportSection
             sb.AppendLine();
             foreach (var item in analysis.BlockedItems.Take(10))
             {
-                sb.AppendLine($"- [{item.Id}] {item.Title}");
+                var reason = string.IsNullOrWhiteSpace(item.Reason) ? "Reason not provided" : item.Reason;
+                sb.AppendLine($"- [{item.Id}] {item.Title} — Reason: {reason}");
             }
             if (analysis.BlockedItems.Count > 10)
             {

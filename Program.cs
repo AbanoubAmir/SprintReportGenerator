@@ -58,6 +58,7 @@ class Program
         var config = new ConfigurationBuilder()
             .SetBasePath(Directory.GetCurrentDirectory())
             .AddJsonFile("appsettings.json", optional: false)
+            .AddJsonFile("appsettings.local.json", optional: true)
             .Build();
 
         return new AzureDevOpsOptions
@@ -107,7 +108,8 @@ class Program
             new TaskEstimatesSection(),
             new PlanVsActualSection(),
             new UserStoriesSection(),
-            new SummarySection()
+            new SummarySection(),
+            new RecommendationsSection()
         };
 
         return new MarkdownReportBuilder(sections);

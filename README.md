@@ -23,6 +23,7 @@ dotnet restore
 copy appsettings.Template.json appsettings.json
 ```
 3) Fill `appsettings.json` with your Azure DevOps details and PAT (keep it local).
+4) Optional: create `appsettings.local.json` (also gitignored) to override values locally without touching `appsettings.json`.
 
 ## Configuration
 `appsettings.json` (local only, not committed):
@@ -39,6 +40,7 @@ copy appsettings.Template.json appsettings.json
   }
 }
 ```
+- Overrides in `appsettings.local.json` take precedence when present.
 - `IterationPath` (if set) overrides `SprintName`.
 - If both are empty, the current sprint is used.
 

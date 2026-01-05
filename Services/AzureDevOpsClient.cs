@@ -204,6 +204,7 @@ ORDER BY [System.Id]";
                     AssignedTo = fields["System.AssignedTo"]?["displayName"]?.ToString() ?? "Unassigned",
                     Priority = fields["Microsoft.VSTS.Common.Priority"]?.ToObject<int?>() ?? 2,
                     AreaPath = fields["System.AreaPath"]?.ToString() ?? string.Empty,
+                    Reason = fields["System.Reason"]?.ToString() ?? string.Empty,
                     CreatedDate = fields["System.CreatedDate"]?.ToObject<DateTime?>(),
                     ChangedDate = fields["System.ChangedDate"]?.ToObject<DateTime?>(),
                     OriginalEstimate = fields["Microsoft.VSTS.Scheduling.OriginalEstimate"]?.ToObject<double?>(),

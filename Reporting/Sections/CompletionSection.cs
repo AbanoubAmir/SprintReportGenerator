@@ -28,7 +28,7 @@ public class CompletionSection : IReportSection
 
             sb.AppendLine($"| **Time Progress** | {timeProgress:F0}% |");
             sb.AppendLine($"| **Status** | {status} |");
-            sb.AppendLine($"| **Completion vs Time** | {Math.Abs(difference):F2}% {(difference < 0 ? \"behind\" : \"ahead of\")} time progress |");
+            sb.AppendLine($"| **Completion vs Time** | {Math.Abs(difference):F2}% {(difference < 0 ? "behind" : "ahead of")} time progress |");
         }
 
         sb.AppendLine($"| **Remaining Work Items** | {analysis.TotalItems - analysis.CompletedCount} |");
