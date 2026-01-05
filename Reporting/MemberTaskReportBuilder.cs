@@ -119,6 +119,7 @@ public class MemberTaskReportBuilder
                 var task = orderedTasks[i];
                 var status = WorkItemStatus.IsCompleted(task.State) ? "✅ Completed" : MarkdownHelper.EscapeTableCell(task.State);
                 var type = MarkdownHelper.EscapeTableCell(task.WorkItemType);
+                var idCell = BuildIdCell(task.Id, context.WorkItemUrlBase);
                 var title = MarkdownHelper.EscapeTableCell(task.Title);
                 var storyTitle = string.IsNullOrWhiteSpace(task.ParentTitle)
                     ? "—"
@@ -134,7 +135,7 @@ public class MemberTaskReportBuilder
                                          task.ChangedDate?.ToString("yyyy-MM-dd") ?? "—";
 
                 sb.AppendLine(
-                    $"| {i + 1} | {task.Id} | {type} | {title} | {status} | {created} | {completedOrUpdated} | {task.OriginalEstimate?.ToString("F1") ?? "—"} | {task.CompletedWork?.ToString("F1") ?? "—"} | {task.RemainingWork?.ToString("F1") ?? "—"} | {storyTitle} | {storyState} | {storyAssignee} |");
+                    $"| {i + 1} | {idCell} | {type} | {title} | {status} | {created} | {completedOrUpdated} | {task.OriginalEstimate?.ToString("F1") ?? "—"} | {task.CompletedWork?.ToString("F1") ?? "—"} | {task.RemainingWork?.ToString("F1") ?? "—"} | {storyTitle} | {storyState} | {storyAssignee} |");
             }
 
             sb.AppendLine();
@@ -159,6 +160,17 @@ public class MemberTaskReportBuilder
     private static string NormalizeName(string? value)
     {
         return (value ?? string.Empty).Trim().ToLowerInvariant();
+    }
+
+    private static string BuildIdCell(int id, string? workItemUrlBase)
+    {
+        if (string.IsNullOrWhiteSpace(workItemUrlBase))
+        {
+            return id.ToString();
+        }
+
+        var url = $"{workItemUrlBase}{id}";
+        return $"[{id}]({url})";
     }
 }
 

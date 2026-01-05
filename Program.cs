@@ -54,7 +54,8 @@ class Program
             StartDate = sprintData.StartDate,
             EndDate = sprintData.EndDate,
             GeneratedAt = DateTime.Now,
-            TeamCapacities = sprintData.TeamCapacities
+                TeamCapacities = sprintData.TeamCapacities,
+                WorkItemUrlBase = BuildWorkItemUrlBase(options)
         };
 
         var report = builder.Build(analysis, context);
@@ -219,7 +220,8 @@ class Program
                 EndDate = sprintData.EndDate,
                 GeneratedAt = DateTime.Now,
                 TeamCapacities = sprintData.TeamCapacities,
-                MemberFilters = effectiveMembers
+                MemberFilters = effectiveMembers,
+                WorkItemUrlBase = BuildWorkItemUrlBase(options)
             };
 
             var report = builder.Build(sprintData, context);
@@ -234,5 +236,20 @@ class Program
         var invalid = Path.GetInvalidFileNameChars().ToHashSet();
         var safeChars = value.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray();
         return new string(safeChars).Replace(' ', '_');
+    }
+
+    private static string? BuildWorkItemUrlBase(AzureDevOpsOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.BaseUrl) ||
+            string.IsNullOrWhiteSpace(options.Organization) ||
+            string.IsNullOrWhiteSpace(options.Project))
+        {
+            return null;
+        }
+
+        var baseUrl = options.BaseUrl.TrimEnd('/');
+        var org = options.Organization.Trim();
+        var project = options.Project.Trim();
+        return $"{baseUrl}/{org}/{project}/_workitems/edit/";
     }
 }
