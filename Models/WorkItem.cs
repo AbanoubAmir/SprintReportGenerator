@@ -12,8 +12,13 @@ public class WorkItem
     public string Reason { get; set; } = string.Empty;
     public DateTime? CreatedDate { get; set; }
     public DateTime? ChangedDate { get; set; }
+    public DateTime? ClosedDate { get; set; }
     public double? OriginalEstimate { get; set; }
     public double? CompletedWork { get; set; }
     public double? RemainingWork { get; set; }
+    public int? ParentId { get; set; }
+    public string? ParentTitle { get; set; }
+    public string? ParentState { get; set; }
+    public string? ParentAssignedTo { get; set; }
 }
 

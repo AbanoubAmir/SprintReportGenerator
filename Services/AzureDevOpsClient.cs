@@ -297,6 +297,8 @@ ORDER BY [System.Id]";
                     continue;
                 }
 
+                var parentId = ResolveParentId(item);
+
                 var workItem = new WorkItem
                 {
                     Id = item?["id"]?.ToObject<int>() ?? 0,
@@ -309,9 +311,11 @@ ORDER BY [System.Id]";
                     Reason = fields["System.Reason"]?.ToString() ?? string.Empty,
                     CreatedDate = fields["System.CreatedDate"]?.ToObject<DateTime?>(),
                     ChangedDate = fields["System.ChangedDate"]?.ToObject<DateTime?>(),
+                    ClosedDate = fields["Microsoft.VSTS.Common.ClosedDate"]?.ToObject<DateTime?>(),
                     OriginalEstimate = fields["Microsoft.VSTS.Scheduling.OriginalEstimate"]?.ToObject<double?>(),
                     CompletedWork = fields["Microsoft.VSTS.Scheduling.CompletedWork"]?.ToObject<double?>(),
-                    RemainingWork = fields["Microsoft.VSTS.Scheduling.RemainingWork"]?.ToObject<double?>()
+                    RemainingWork = fields["Microsoft.VSTS.Scheduling.RemainingWork"]?.ToObject<double?>(),
+                    ParentId = parentId
                 };
 
                 allWorkItems.Add(workItem);
@@ -319,6 +323,27 @@ ORDER BY [System.Id]";
         }
 
         return allWorkItems;
+    }
+
+    private static int? ResolveParentId(JToken? item)
+    {
+        var relations = item?["relations"] as JArray;
+        var parentRelation = relations?
+            .FirstOrDefault(r => r?["rel"]?.ToString().Equals("System.LinkTypes.Hierarchy-Reverse", StringComparison.OrdinalIgnoreCase) == true);
+
+        var url = parentRelation?["url"]?.ToString();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return null;
+        }
+
+        var idSegment = url.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
+        if (int.TryParse(idSegment, out var id))
+        {
+            return id;
+        }
+
+        return null;
     }
 }
 

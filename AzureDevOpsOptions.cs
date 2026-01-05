@@ -12,5 +12,6 @@ public class AzureDevOpsOptions
     public string? TeamName { get; set; }
     public string? SprintName { get; set; }
     public string? IterationPath { get; set; }
+    public IReadOnlyList<string> MemberFilters { get; set; } = Array.Empty<string>();
 }
 

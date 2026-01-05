@@ -49,10 +49,20 @@ dotnet run
 ```bash
 dotnet run "Sprint Name"
 ```
+- Generate per-member task report (optionally for multiple sprints):
+```bash
+dotnet run -- --member-report "Sprint Name A" "Sprint Name B"
+```
+Creates `Member_Task_Report_<sprint>_<date>.md` grouped by team member with tasks and bugs, estimates, completion, remaining effort, and parent user story details.
+- Limit to specific members (comma/semicolon separated):
+```bash
+dotnet run -- --member-report "Sprint Name" --members "Name 1;Name 2;Name 3"
+```
 
 ## Output
 - Generates `Sprint_Complete_Analysis_<MMM_d_yyyy>.md` in the working directory.
 - Contents include Executive Summary, Current State, Completion, Estimates, Plan vs Actual, User Stories, and Summary/Insights.
+- Generates `Member_Task_Report_<sprint>_<date>.md` when `--member-report` is used. Honors optional member filters from CLI or `Report:MemberFilters` in `appsettings.json`.
 
 ## Architecture (extensible)
 - **Data**: `IAzureDevOpsClient` / `AzureDevOpsClient`
