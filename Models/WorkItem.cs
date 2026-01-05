@@ -7,6 +7,7 @@ public class WorkItem
     public string State { get; set; } = string.Empty;
     public string WorkItemType { get; set; } = string.Empty;
     public string AssignedTo { get; set; } = string.Empty;
+    public string? AssignedToUniqueName { get; set; }
     public int Priority { get; set; }
     public string AreaPath { get; set; } = string.Empty;
     public string Reason { get; set; } = string.Empty;
@@ -21,7 +22,10 @@ public class WorkItem
     public string? ParentState { get; set; }
     public string? ParentAssignedTo { get; set; }
     public string? ActivatedBy { get; set; }
+    public string? ActivatedByUniqueName { get; set; }
     public string? ResolvedBy { get; set; }
+    public string? ResolvedByUniqueName { get; set; }
     public string? ClosedBy { get; set; }
+    public string? ClosedByUniqueName { get; set; }
 }
 

@@ -166,9 +166,13 @@ public class MemberTaskReportBuilder
     private static string? ResolveOwner(WorkItem workItem, HashSet<string> normalizedFilters)
     {
         var assigned = NormalizeName(workItem.AssignedTo);
+        var assignedUnique = NormalizeName(workItem.AssignedToUniqueName);
         var activated = NormalizeName(workItem.ActivatedBy);
+        var activatedUnique = NormalizeName(workItem.ActivatedByUniqueName);
         var resolved = NormalizeName(workItem.ResolvedBy);
+        var resolvedUnique = NormalizeName(workItem.ResolvedByUniqueName);
         var closed = NormalizeName(workItem.ClosedBy);
+        var closedUnique = NormalizeName(workItem.ClosedByUniqueName);
 
         // No filters: fall back to current assignee (existing behavior)
         if (!normalizedFilters.Any())
@@ -177,19 +181,19 @@ public class MemberTaskReportBuilder
         }
 
         // Prefer matches in order: current assignee, resolved by, closed by, activated by
-        if (normalizedFilters.Contains(assigned) && !string.IsNullOrWhiteSpace(workItem.AssignedTo))
+        if ((normalizedFilters.Contains(assigned) || normalizedFilters.Contains(assignedUnique)) && !string.IsNullOrWhiteSpace(workItem.AssignedTo))
         {
             return workItem.AssignedTo;
         }
-        if (normalizedFilters.Contains(resolved) && !string.IsNullOrWhiteSpace(workItem.ResolvedBy))
+        if ((normalizedFilters.Contains(resolved) || normalizedFilters.Contains(resolvedUnique)) && !string.IsNullOrWhiteSpace(workItem.ResolvedBy))
         {
             return workItem.ResolvedBy;
         }
-        if (normalizedFilters.Contains(closed) && !string.IsNullOrWhiteSpace(workItem.ClosedBy))
+        if ((normalizedFilters.Contains(closed) || normalizedFilters.Contains(closedUnique)) && !string.IsNullOrWhiteSpace(workItem.ClosedBy))
         {
             return workItem.ClosedBy;
         }
-        if (normalizedFilters.Contains(activated) && !string.IsNullOrWhiteSpace(workItem.ActivatedBy))
+        if ((normalizedFilters.Contains(activated) || normalizedFilters.Contains(activatedUnique)) && !string.IsNullOrWhiteSpace(workItem.ActivatedBy))
         {
             return workItem.ActivatedBy;
         }
@@ -197,5 +201,4 @@ public class MemberTaskReportBuilder
         return null;
     }
 }
-
 
