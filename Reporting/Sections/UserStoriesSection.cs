@@ -46,7 +46,8 @@ public class UserStoriesSection : IReportSection
                 sb.AppendLine();
                 foreach (var story in completedStories)
                 {
-                    sb.AppendLine($"- [{story.Id}] {story.Title}");
+                    var link = MarkdownHelper.BuildWorkItemLink(story.Id, context.WorkItemUrlBase, story.Title);
+                    sb.AppendLine($"- {link}");
                 }
                 if (originalCompleted > 50)
                 {
@@ -62,7 +63,8 @@ public class UserStoriesSection : IReportSection
                 sb.AppendLine();
                 foreach (var story in incompleteStories)
                 {
-                    sb.AppendLine($"- [{story.Id}] {story.Title}");
+                    var link = MarkdownHelper.BuildWorkItemLink(story.Id, context.WorkItemUrlBase, story.Title);
+                    sb.AppendLine($"- {link}");
                 }
                 if (originalIncomplete > 50)
                 {
@@ -87,9 +89,10 @@ public class UserStoriesSection : IReportSection
                 var story = addedStories[index];
                 var status = WorkItemStatus.IsCompleted(story.State) ? "✅ Completed" : "⚠️ Incomplete";
                 var addedDate = story.CreatedDate?.ToString("yyyy-MM-dd") ?? "Unknown";
-                var escapedTitle = MarkdownHelper.EscapeTableCell(story.Title);
+                var escapedTitle = MarkdownHelper.BuildWorkItemLink(story.Id, context.WorkItemUrlBase, MarkdownHelper.EscapeTableCell(story.Title), escapeForTable: true);
                 var escapedAssignee = MarkdownHelper.EscapeTableCell(story.AssignedTo);
-                sb.AppendLine($"| {index + 1} | {story.Id} | {escapedTitle} | {addedDate} | {status} | {story.Priority} | {escapedAssignee} |");
+                var idCell = MarkdownHelper.BuildWorkItemLink(story.Id, context.WorkItemUrlBase, story.Id.ToString(), escapeForTable: true);
+                sb.AppendLine($"| {index + 1} | {idCell} | {escapedTitle} | {addedDate} | {status} | {story.Priority} | {escapedAssignee} |");
             }
             sb.AppendLine();
         }

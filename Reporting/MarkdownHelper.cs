@@ -24,5 +24,21 @@ public static class MarkdownHelper
         sb.AppendLine();
         return sb;
     }
+
+    public static string BuildWorkItemLink(int? id, string? workItemUrlBase, string? label = null, bool escapeForTable = false)
+    {
+        var text = label ?? (id?.ToString() ?? "—");
+        if (escapeForTable)
+        {
+            text = EscapeTableCell(text);
+        }
+
+        if (!id.HasValue || string.IsNullOrWhiteSpace(workItemUrlBase))
+        {
+            return text;
+        }
+
+        return $"[{text}]({workItemUrlBase}{id.Value})";
+    }
 }
 
