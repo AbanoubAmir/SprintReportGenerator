@@ -20,5 +20,8 @@ public class WorkItem
     public string? ParentTitle { get; set; }
     public string? ParentState { get; set; }
     public string? ParentAssignedTo { get; set; }
+    public string? ActivatedBy { get; set; }
+    public string? ResolvedBy { get; set; }
+    public string? ClosedBy { get; set; }
 }
 

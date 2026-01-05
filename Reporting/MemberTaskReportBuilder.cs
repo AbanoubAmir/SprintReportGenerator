@@ -29,20 +29,17 @@ public class MemberTaskReportBuilder
             .ToList();
 
         var normalizedFilters = NormalizeFilters(context.MemberFilters);
-        if (normalizedFilters.Any())
-        {
-            workItems = workItems
-                .Where(w => normalizedFilters.Contains(NormalizeName(w.AssignedTo)))
-                .ToList();
-        }
+        var filteredItems = normalizedFilters.Any()
+            ? workItems.Where(w => ResolveOwner(w, normalizedFilters) != null).ToList()
+            : workItems;
 
         if (normalizedFilters.Any())
         {
-            sb.AppendLine($"> Filtered to members: {string.Join(", ", context.MemberFilters)}");
+            sb.AppendLine($"> Filtered to members (includes reassigned items credited by activity): {string.Join(", ", context.MemberFilters)}");
             sb.AppendLine();
         }
 
-        if (workItems.Count == 0)
+        if (filteredItems.Count == 0)
         {
             sb.AppendLine("> No tasks or bugs found for this sprint with the specified filters.");
             sb.AppendLine();
@@ -53,7 +50,7 @@ public class MemberTaskReportBuilder
             .Where(w => w.WorkItemType.Equals("User Story", StringComparison.OrdinalIgnoreCase))
             .ToDictionary(w => w.Id, w => w);
 
-        foreach (var task in workItems)
+        foreach (var task in filteredItems)
         {
             if (task.ParentId.HasValue && stories.TryGetValue(task.ParentId.Value, out var parent))
             {
@@ -63,18 +60,18 @@ public class MemberTaskReportBuilder
             }
         }
 
-        var totalCompleted = workItems.Count(t => WorkItemStatus.IsCompleted(t.State));
-        var totalOriginalEstimate = workItems.Sum(t => t.OriginalEstimate ?? 0);
-        var totalCompletedWork = workItems.Sum(t => t.CompletedWork ?? 0);
-        var totalRemainingWork = workItems.Sum(t => t.RemainingWork ?? 0);
-        var totalTasks = workItems.Count(t => t.WorkItemType.Equals("Task", StringComparison.OrdinalIgnoreCase));
-        var totalBugs = workItems.Count(t => t.WorkItemType.Equals("Bug", StringComparison.OrdinalIgnoreCase));
+        var totalCompleted = filteredItems.Count(t => WorkItemStatus.IsCompleted(t.State));
+        var totalOriginalEstimate = filteredItems.Sum(t => t.OriginalEstimate ?? 0);
+        var totalCompletedWork = filteredItems.Sum(t => t.CompletedWork ?? 0);
+        var totalRemainingWork = filteredItems.Sum(t => t.RemainingWork ?? 0);
+        var totalTasks = filteredItems.Count(t => t.WorkItemType.Equals("Task", StringComparison.OrdinalIgnoreCase));
+        var totalBugs = filteredItems.Count(t => t.WorkItemType.Equals("Bug", StringComparison.OrdinalIgnoreCase));
 
         sb.AppendLine("## Sprint Task Summary");
         sb.AppendLine();
         sb.AppendLine("| Metric | Value |");
         sb.AppendLine("|--------|-------|");
-        sb.AppendLine($"| **Total Items (Tasks + Bugs)** | {workItems.Count} |");
+        sb.AppendLine($"| **Total Items (Tasks + Bugs)** | {filteredItems.Count} |");
         sb.AppendLine($"| **Tasks** | {totalTasks} |");
         sb.AppendLine($"| **Bugs** | {totalBugs} |");
         sb.AppendLine($"| **Completed Items** | {totalCompleted} |");
@@ -83,17 +80,19 @@ public class MemberTaskReportBuilder
         sb.AppendLine($"| **Total Remaining Work (h)** | {totalRemainingWork:F1} |");
         sb.AppendLine();
 
-        var grouped = workItems
-            .GroupBy(t => string.IsNullOrWhiteSpace(t.AssignedTo) ? "Unassigned" : t.AssignedTo)
+        var grouped = filteredItems
+            .Select(w => (WorkItem: w, Owner: ResolveOwner(w, normalizedFilters)))
+            .Where(x => !string.IsNullOrWhiteSpace(x.Owner))
+            .GroupBy(x => x.Owner!)
             .OrderBy(g => g.Key);
 
         foreach (var group in grouped)
         {
             var memberName = group.Key;
-            var memberCompleted = group.Count(t => WorkItemStatus.IsCompleted(t.State));
-            var memberOriginalEstimate = group.Sum(t => t.OriginalEstimate ?? 0);
-            var memberCompletedWork = group.Sum(t => t.CompletedWork ?? 0);
-            var memberRemainingWork = group.Sum(t => t.RemainingWork ?? 0);
+            var memberCompleted = group.Count(t => WorkItemStatus.IsCompleted(t.WorkItem.State));
+            var memberOriginalEstimate = group.Sum(t => t.WorkItem.OriginalEstimate ?? 0);
+            var memberCompletedWork = group.Sum(t => t.WorkItem.CompletedWork ?? 0);
+            var memberRemainingWork = group.Sum(t => t.WorkItem.RemainingWork ?? 0);
 
             sb.AppendLine($"### {memberName}");
             sb.AppendLine();
@@ -106,17 +105,17 @@ public class MemberTaskReportBuilder
             sb.AppendLine($"| **Remaining Work (h)** | {memberRemainingWork:F1} |");
             sb.AppendLine();
 
-            sb.AppendLine("| # | ID | Type | Title | Status | Created | Completed/Updated | Orig Est (h) | Completed (h) | Remaining (h) | User Story | Story Status | Story Assignee |");
-            sb.AppendLine("|---|----|------|-------|--------|---------|-------------------|--------------|---------------|---------------|------------|--------------|----------------|");
+            sb.AppendLine("| # | ID | Type | Title | Status | Created | Completed/Updated | Orig Est (h) | Completed (h) | Remaining (h) | Current Assignee | User Story | Story Status | Story Assignee |");
+            sb.AppendLine("|---|----|------|-------|--------|---------|-------------------|--------------|---------------|---------------|------------------|------------|--------------|----------------|");
 
             var orderedTasks = group
-                .OrderByDescending(t => WorkItemStatus.IsCompleted(t.State))
-                .ThenBy(t => t.Id)
+                .OrderByDescending(t => WorkItemStatus.IsCompleted(t.WorkItem.State))
+                .ThenBy(t => t.WorkItem.Id)
                 .ToList();
 
             for (var i = 0; i < orderedTasks.Count; i++)
             {
-                var task = orderedTasks[i];
+                var task = orderedTasks[i].WorkItem;
                 var status = WorkItemStatus.IsCompleted(task.State) ? "✅ Completed" : MarkdownHelper.EscapeTableCell(task.State);
                 var type = MarkdownHelper.EscapeTableCell(task.WorkItemType);
                 var idCell = MarkdownHelper.BuildWorkItemLink(task.Id, context.WorkItemUrlBase, escapeForTable: true);
@@ -134,9 +133,10 @@ public class MemberTaskReportBuilder
                 var created = task.CreatedDate?.ToString("yyyy-MM-dd") ?? "—";
                 var completedOrUpdated = task.ClosedDate?.ToString("yyyy-MM-dd") ??
                                          task.ChangedDate?.ToString("yyyy-MM-dd") ?? "—";
+                var currentAssignee = MarkdownHelper.EscapeTableCell(task.AssignedTo);
 
                 sb.AppendLine(
-                    $"| {i + 1} | {idCell} | {type} | {title} | {status} | {created} | {completedOrUpdated} | {task.OriginalEstimate?.ToString("F1") ?? "—"} | {task.CompletedWork?.ToString("F1") ?? "—"} | {task.RemainingWork?.ToString("F1") ?? "—"} | {storyLink} | {storyState} | {storyAssignee} |");
+                    $"| {i + 1} | {idCell} | {type} | {title} | {status} | {created} | {completedOrUpdated} | {task.OriginalEstimate?.ToString("F1") ?? "—"} | {task.CompletedWork?.ToString("F1") ?? "—"} | {task.RemainingWork?.ToString("F1") ?? "—"} | {currentAssignee} | {storyLink} | {storyState} | {storyAssignee} |");
             }
 
             sb.AppendLine();
@@ -163,15 +163,38 @@ public class MemberTaskReportBuilder
         return (value ?? string.Empty).Trim().ToLowerInvariant();
     }
 
-    private static string BuildIdCell(int id, string? workItemUrlBase)
+    private static string? ResolveOwner(WorkItem workItem, HashSet<string> normalizedFilters)
     {
-        if (string.IsNullOrWhiteSpace(workItemUrlBase))
+        var assigned = NormalizeName(workItem.AssignedTo);
+        var activated = NormalizeName(workItem.ActivatedBy);
+        var resolved = NormalizeName(workItem.ResolvedBy);
+        var closed = NormalizeName(workItem.ClosedBy);
+
+        // No filters: fall back to current assignee (existing behavior)
+        if (!normalizedFilters.Any())
         {
-            return id.ToString();
+            return string.IsNullOrWhiteSpace(workItem.AssignedTo) ? "Unassigned" : workItem.AssignedTo;
         }
 
-        var url = $"{workItemUrlBase}{id}";
-        return $"[{id}]({url})";
+        // Prefer matches in order: current assignee, resolved by, closed by, activated by
+        if (normalizedFilters.Contains(assigned) && !string.IsNullOrWhiteSpace(workItem.AssignedTo))
+        {
+            return workItem.AssignedTo;
+        }
+        if (normalizedFilters.Contains(resolved) && !string.IsNullOrWhiteSpace(workItem.ResolvedBy))
+        {
+            return workItem.ResolvedBy;
+        }
+        if (normalizedFilters.Contains(closed) && !string.IsNullOrWhiteSpace(workItem.ClosedBy))
+        {
+            return workItem.ClosedBy;
+        }
+        if (normalizedFilters.Contains(activated) && !string.IsNullOrWhiteSpace(workItem.ActivatedBy))
+        {
+            return workItem.ActivatedBy;
+        }
+
+        return null;
     }
 }
 
